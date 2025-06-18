@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>インタラクティブ・オーダー状況ダッシュボード</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- noUiSlider (Range Slider) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.css">
+    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
+        }
+        /* noUiSlider custom styles */
+        .noUi-target { border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .noUi-connect { background: #3b82f6; }
+        .noUi-handle { border: 2px solid white; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.2); cursor: pointer; }
+        .noUi-handle:focus { outline: none; }
+        .control-button.active { background-color: #3b82f6; color: white; }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-2 md:p-4">
+    <div class="w-full max-w-5xl bg-white rounded-2xl shadow-lg p-4 md:p-8">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
+            <div>
+                <h1 class="text-2xl md:text-3xl font-bold text-gray-800">オーダー状況ダッシュボード</h1>
+                <p class="text-gray-500">2025/06/17 時点</p>
+            </div>
+        </div>
+
+        <!-- コントロールパネル -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 p-4 bg-gray-50 rounded-lg border">
+            <!-- グラフ種類 -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">グラフ種類</label>
+                <div id="chart-type-selector" class="flex space-x-2">
+                    <button data-type="bar" class="control-button active w-full py-2 px-3 text-sm font-semibold rounded-md shadow-sm border border-gray-300">棒グラフ</button>
+                    <button data-type="line" class="control-button w-full py-2 px-3 text-sm font-semibold rounded-md shadow-sm border border-gray-300">線グラフ</button>
+                    <button data-type="pie" class="control-button w-full py-2 px-3 text-sm font-semibold rounded-md shadow-sm border border-gray-300">円グラフ</button>
+                </div>
+            </div>
+            <!-- プランフィルター -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">プランフィルター</label>
+                <div id="plan-filter" class="flex flex-col space-y-2">
+                    <label class="inline-flex items-center"><input type="checkbox" data-plan="店舗強化プラン" class="form-checkbox h-5 w-5 text-blue-600 rounded" checked> <span class="ml-2 text-gray-700">店舗強化プラン</span></label>
+                    <label class="inline-flex items-center"><input type="checkbox" data-plan="基本プラン" class="form-checkbox h-5 w-5 text-gray-600 rounded" checked> <span class="ml-2 text-gray-700">基本プラン</span></label>
+                </div>
+            </div>
+            <!-- 日付範囲スライダー -->
+            <div class="md:col-span-1">
+                <label for="date-slider" class="block text-sm font-medium text-gray-700 mb-2">日付範囲</label>
+                <div id="date-slider" class="mt-4 mb-2"></div>
+                <div id="slider-labels" class="flex justify-between text-xs text-gray-500">
+                    <span id="slider-start-label"></span>
+                    <span id="slider-end-label"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- グラフコンテナ -->
+        <div class="chart-container relative h-96 mb-8">
+            <canvas id="orderChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // --- 元データと状態管理 ---
+        const originalData = {
+            labels: ['6月12日', '6月13日', '6月14日', '6月15日', '6月16日'],
+            datasets: [
+                { label: '店舗強化プラン', data: [5, 8, 5, 4, 2], backgroundColor: 'rgba(59, 130, 246, 0.8)', borderColor: '#1d4ed8' },
+                { label: '基本プラン', data: [0, 1, 0, 0, 0], backgroundColor: 'rgba(107, 114, 128, 0.8)', borderColor: '#374151' }
+            ]
+        };
+
+        let currentChart = null;
+        let appState = {
+            chartType: 'bar',
+            visiblePlans: ['店舗強化プラン', '基本プラン'],
+            dateRange: [0, originalData.labels.length - 1]
+        };
+
+        // --- DOM要素 ---
+        const chartTypeSelector = document.getElementById('chart-type-selector');
+        const planFilter = document.getElementById('plan-filter');
+        const dateSliderElement = document.getElementById('date-slider');
+        const sliderStartLabel = document.getElementById('slider-start-label');
+        const sliderEndLabel = document.getElementById('slider-end-label');
+        const ctx = document.getElementById('orderChart').getContext('2d');
+        
+        // --- 日付範囲スライダーの初期化 (noUiSlider) ---
+        noUiSlider.create(dateSliderElement, {
+            start: [0, originalData.labels.length - 1],
+            connect: true,
+            step: 1,
+            range: { 'min': 0, 'max': originalData.labels.length - 1 },
+            tooltips: { to: (value) => originalData.labels[Math.round(value)] }
+        });
+
+        // --- イベントリスナー ---
+        chartTypeSelector.addEventListener('click', (e) => {
+            if (e.target.tagName === 'BUTTON') {
+                appState.chartType = e.target.dataset.type;
+                updateDashboard();
+            }
+        });
+
+        planFilter.addEventListener('change', (e) => {
+            const planName = e.target.dataset.plan;
+            if (e.target.checked) {
+                appState.visiblePlans.push(planName);
+            } else {
+                appState.visiblePlans = appState.visiblePlans.filter(p => p !== planName);
+            }
+            updateDashboard();
+        });
+
+        dateSliderElement.noUiSlider.on('update', (values) => {
+            const [start, end] = values.map(v => Math.round(v));
+            appState.dateRange = [start, end];
+            sliderStartLabel.textContent = originalData.labels[start];
+            sliderEndLabel.textContent = originalData.labels[end];
+        });
+        dateSliderElement.noUiSlider.on('change', () => {
+            updateDashboard();
+        });
+
+
+        // --- ダッシュボード更新ロジック ---
+        function updateDashboard() {
+            // コントロールUIの更新
+            document.querySelectorAll('#chart-type-selector button').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.type === appState.chartType);
+            });
+            
+            // データのフィルタリング
+            const [startIndex, endIndex] = appState.dateRange;
+            const filteredLabels = originalData.labels.slice(startIndex, endIndex + 1);
+            
+            const filteredDatasets = originalData.datasets
+                .filter(ds => appState.visiblePlans.includes(ds.label))
+                .map(ds => ({
+                    ...ds,
+                    data: ds.data.slice(startIndex, endIndex + 1),
+                    fill: appState.chartType === 'line' ? false : undefined,
+                    tension: appState.chartType === 'line' ? 0.2 : 0,
+                }));
+
+            if (currentChart) {
+                currentChart.destroy();
+            }
+            
+            if (appState.chartType === 'pie') {
+                createPieChart(filteredDatasets);
+            } else {
+                createBarLineChart(filteredLabels, filteredDatasets);
+            }
+        }
+
+        function createBarLineChart(labels, datasets) {
+            currentChart = new Chart(ctx, {
+                type: appState.chartType,
+                data: { labels, datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: true, text: '日別注文件数', font: { size: 18, weight: 'bold' }, color: '#1f2937' },
+                        legend: { position: 'bottom' },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    scales: {
+                        x: { stacked: appState.chartType === 'bar' },
+                        y: { stacked: appState.chartType === 'bar', beginAtZero: true, ticks: { stepSize: 1 } }
+                    }
+                }
+            });
+        }
+        
+        function createPieChart(datasets) {
+            const pieLabels = datasets.map(ds => ds.label);
+            const pieData = datasets.map(ds => ds.data.reduce((sum, val) => sum + val, 0));
+            const pieColors = datasets.map(ds => ds.backgroundColor);
+            
+            currentChart = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: pieLabels,
+                    datasets: [{ data: pieData, backgroundColor: pieColors }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: true, text: 'プラン別合計注文件数', font: { size: 18, weight: 'bold' }, color: '#1f2937' },
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.label || '';
+                                    const value = context.raw || 0;
+                                    const total = context.chart.getDatasetMeta(0).total;
+                                    const percentage = total > 0 ? ((value / total) * 100).toFixed(1) + '%' : '0%';
+                                    return `${label}: ${value}件 (${percentage})`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // --- 初期表示 ---
+        updateDashboard();
+    </script>
+</body>
+</html>
